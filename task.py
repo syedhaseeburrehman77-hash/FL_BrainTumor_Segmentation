@@ -4,38 +4,9 @@ import torch
 import torch.nn as nn
 from datasets_loaders import create_dataset
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, Normalize, ToTensor, Resize
 from torchvision.transforms import Compose, Resize, ToTensor, Normalize, Lambda
-from torchvision import models
 from utils.partitioner_helper import get_partitioner
 from collections import Counter
-
-class Net(nn.Module):
-    """Model (simple CNN adapted from 'PyTorch: A 60 Minute Blitz')"""
-
-    def __init__(self):
-        super(Net, self).__init__()
-       # Load pretrained MobileNetV2
-        self.model = models.mobilenet_v2(
-            weights=models.MobileNet_V2_Weights.DEFAULT
-        )
-
-        # Freeze backbone (optional)
-        for param in self.model.features.parameters():
-            param.requires_grad = False
-
-        # Custom classification head
-        self.model.classifier = nn.Sequential(
-            nn.Dropout(p=0.4),
-            nn.Linear(1280, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.3),
-            nn.Linear(256, 2)
-        )
-
-    def forward(self, x):
-      return self.model(x)
-
 
 pytorch_transforms = Compose([
     Lambda(lambda img: img.convert("RGB")),
