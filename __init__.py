@@ -1,1 +1,1 @@
-"""pytorchexample."""
+"""Federated brain-tumor segmentation Flower App."""
