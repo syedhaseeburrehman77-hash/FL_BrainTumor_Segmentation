@@ -1,96 +1,76 @@
-"""pytorchexample: A Flower / PyTorch app."""
-
 import torch
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
+from monai.utils import set_determinism
 
-from task import load_data
-from task import test as test_fn
+from datasets_loaders.registry import get_partition_loaders
+from models.unet import build_model
+from task import evaluate, train
 
-from algorithms import get_trainer
-
-from models import create_model
-
-# Flower ClientApp
 app = ClientApp()
 
+def get_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def get_loaders(context: Context):
+    partition_id = int(context.node_config["partition-id"])
+
+    set_determinism(seed=int(context.run_config["seed"]) + partition_id)
+
+    return get_partition_loaders(
+        context.run_config,
+        partition_id,
+    )
 
 @app.train()
-def train(msg: Message, context: Context):
-    """Train the model on local data."""
+def train_client(message: Message, context: Context) -> Message:
+    """Train one simulated FeTS institution."""
 
-    # Load the model and initialize it with the received weights
-    model_name = context.run_config["model_name"]
-    model = create_model(model_name)
-    model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    device = get_device()
+    model = build_model().to(device)
+    model.load_state_dict(message.content["arrays"].to_torch_state_dict())
 
-    # Load the data
-    partition_id = context.node_config["partition-id"]
-    num_partitions = context.node_config["num-partitions"]
-    batch_size = context.run_config["batch-size"]
-    trainloader, _ = load_data(partition_id, num_partitions, batch_size)
+    train_loader, _ = get_loaders(context)
 
-    # Pull algorithm-specific kwargs (e.g. proximal_mu) straight from config —
-    # trainers that don't need them just ignore extras via **kwargs
-    algorithm = context.run_config["algorithm"]
-    trainer = get_trainer(
-        algorithm,
-        proximal_mu=msg.content["config"].get("proximal_mu", 0.0),
+    loss = train(
+        model=model,
+        loader=train_loader,
+        epochs=int(context.run_config["local-epochs"]),
+        learning_rate=float(message.content["config"]["lr"]),
+        device=device,
     )
-
-    # Call the training function
-    train_loss = trainer.train(
-        model,
-        trainloader,
-        context.run_config["local-epochs"],
-        msg.content["config"]["lr"],
-        device,
+    return Message(
+        content=RecordDict(
+            {
+                "arrays": ArrayRecord(model.state_dict()),
+                "metrics": MetricRecord(
+                    {
+                        "train_loss": loss,
+                        "num-examples": len(train_loader.dataset),
+                    }
+                ),
+            }
+        ),
+        reply_to=message,
     )
-
-    # Construct and return reply Message
-    model_record = ArrayRecord(model.state_dict())
-    metrics = {
-        "train_loss": train_loss,
-        "num-examples": len(trainloader.dataset),
-    }
-    metric_record = MetricRecord(metrics)
-    content = RecordDict({"arrays": model_record, "metrics": metric_record})
-    return Message(content=content, reply_to=msg)
-
 
 @app.evaluate()
-def evaluate(msg: Message, context: Context):
-    """Evaluate the model on local data."""
+def evaluate_client(message: Message, context: Context) -> Message:
+    """Evaluate the received global model on one institution's validation data."""
 
-    # Load the model and initialize it with the received weights
-    model_name = context.run_config["model_name"]
-    model = create_model(model_name)
-    # model = Net()
-    model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    device = get_device()
+    model = build_model().to(device)
+    model.load_state_dict(message.content["arrays"].to_torch_state_dict())
 
-    # Load the data
-    partition_id = context.node_config["partition-id"]
-    num_partitions = context.node_config["num-partitions"]
-    batch_size = context.run_config["batch-size"]
-    _, valloader = load_data(partition_id, num_partitions, batch_size)
+    _, validation_loader = get_loaders(context)
+    metrics = evaluate(model, validation_loader, device)
+    metrics["num-examples"] = len(validation_loader.dataset)
 
-    # Call the evaluation function
-    eval_loss, eval_acc = test_fn(
-        model,
-        valloader,
-        device,
+    return Message(
+        content=RecordDict(
+            {
+                "metrics": MetricRecord(metrics),
+            }
+        ),
+        reply_to=message,
     )
-
-    # Construct and return reply Message
-    metrics = {
-        "eval_loss": eval_loss,
-        "eval_acc": eval_acc,
-        "num-examples": len(valloader.dataset),
-    }
-    metric_record = MetricRecord(metrics)
-    content = RecordDict({"metrics": metric_record})
-    return Message(content=content, reply_to=msg)
