@@ -1,8 +1,6 @@
-from .base import BaseTrainer
+from flwr.serverapp.strategy import FedAvg
+from algorithms.base import common_strategy_config
 
 
-class FedAvgTrainer(BaseTrainer):
-    """Plain local training — no extra regularization."""
-
-    def compute_loss(self, model, outputs, labels, criterion):
-        return criterion(outputs, labels)
+def create(config: dict) -> FedAvg:
+    return FedAvg(**common_strategy_config(config))
