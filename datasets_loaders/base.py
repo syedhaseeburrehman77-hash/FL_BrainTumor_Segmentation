@@ -1,15 +1,16 @@
-# datasets/base.py
-
 from abc import ABC, abstractmethod
-from datasets import Dataset
+from dataclasses import dataclass
+from pathlib import Path
 
+@dataclass(frozen=True)
+class DatasetConfig:
+    data_root: Path
+    partition_csv: Path
+    batch_size: int
+    num_workers: int = 0
+    seed: int = 42
 
-class BaseDatasetLoader(ABC):
-
-    def __init__(self, root_dir: str):
-        self.root_dir = root_dir
-
+class BaseFederatedDataset(ABC):
     @abstractmethod
-    def load(self) -> Dataset:
-        """Return a HuggingFace Dataset"""
-        pass
+    def load_partition(self, partition_id: int):
+        """Return one client's train and validation DataLoaders."""
