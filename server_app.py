@@ -1,78 +1,51 @@
+from pathlib import Path
+
+import pandas as pd
 import torch
-from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
+from flwr.app import ArrayRecord, ConfigRecord, Context
 from flwr.serverapp import Grid, ServerApp
+from flwr.serverapp.strategy import FedAdam, FedAvg, FedProx
 
-from task import load_centralized_dataset, test
+from algorithms.regsimagg import RegSimAgg
+from models.unet import build_model
 
-from algorithms.server_strategies import get_strategy
-
-from models import create_model
-
-# Create ServerApp
 app = ServerApp()
-model_name = None
-@app.main()
 
-def main(grid: Grid, context: Context) -> None:
-    """Main entry point for the ServerApp."""
-    global model_name 
-    algorithm = context.run_config["algorithm"]
 
-    # Read run config
-    fraction_evaluate: float = context.run_config["fraction-evaluate"]
-    num_rounds: int = context.run_config["num-server-rounds"]
-    lr: float = context.run_config["learning-rate"]
-
-    # Model selected from config
-    model_name = context.run_config["model_name"]
-
-    # Load global model
-    global_model = create_model(model_name)    
-    arrays = ArrayRecord(global_model.state_dict())
-
-    # Build kwargs relevant to whichever strategy is picked;
-    # extras are ignored by strategies that don't use them
-    strategy_kwargs = {
-        "fraction_evaluate": context.run_config["fraction-evaluate"],
-        "min_available_nodes": context.run_config["min-available-clients"],
+def build_strategy(name: str, config):
+    common = {
+        "fraction_train": 1.0,
+        "fraction_evaluate": 1.0,
     }
+    if name == "fedprox":
+        return FedProx(proximal_mu=0.01, **common)
+    if name == "fedadam":
+        return FedAdam(**common)
+    if name == "regsimagg":
+        return RegSimAgg(
+            regularization_round=int(config["regsimagg-regularization-round"]),
+            **common,
+        )
+    return FedAvg(**common)
 
-    if algorithm == "fedprox":
-        strategy_kwargs["proximal_mu"] = context.run_config["proximal-mu"]
 
-    strategy = get_strategy(algorithm, **strategy_kwargs)
-
-    # Start strategy, run FedAvg for `num_rounds`
-    result = strategy.start(
+@app.main()
+def main(grid: Grid, context: Context) -> None:
+    config = context.run_config
+    strategy_name = str(config["strategy"]).lower()
+    result = build_strategy(strategy_name, config).start(
         grid=grid,
-        initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr}),
-        num_rounds=num_rounds,
-        evaluate_fn=global_evaluate,
+        initial_arrays=ArrayRecord(build_model().state_dict()),
+        train_config=ConfigRecord({"lr": float(config["learning-rate"])}),
+        num_rounds=int(config["num-server-rounds"]),
     )
 
-    if context.run_config["save-model"]:
-        # Save final model to disk
-        print("\nSaving final model to disk...")
-        state_dict = result.arrays.to_torch_state_dict()
-        torch.save(state_dict, "final_model.pt")
+    output = Path(config["output-dir"])
+    output.mkdir(exist_ok=True)
+    torch.save(result.arrays.to_torch_state_dict(), output / f"{strategy_name}_final.pt")
 
-
-def global_evaluate(server_round: int, arrays: ArrayRecord) -> MetricRecord:
-    """Evaluate model on central data."""
-
-    # Load the model and initialize it with the received weights
-   
-    model = create_model(model_name)  
-    model.load_state_dict(arrays.to_torch_state_dict())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-
-    # Load entire test set
-    test_dataloader = load_centralized_dataset()
-
-    # Evaluate the global model on the test set
-    test_loss, test_acc = test(model, test_dataloader, device)
-
-    # Return the evaluation metrics
-    return MetricRecord({"accuracy": test_acc, "loss": test_loss})
+    rows = []
+    for round_id, metrics in result.evaluate_metrics_clientapp.items():
+        rows.append({"round": round_id, **dict(metrics)})
+    if rows:
+        pd.DataFrame(rows).to_csv(output / f"{strategy_name}_metrics.csv", index=False)
