@@ -7,6 +7,7 @@ name = "brain_tumor_fl"
 version = "0.1.0"
 description = "Brain Tumor 3D MRI Segmentation with Flower Federated Learning"
 license = { text = "Apache-2.0" }
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "flwr[simulation]==1.37.0",
     "torch>=2.1.0",
@@ -21,21 +22,27 @@ dependencies = [
 packages = ["brain_tumor_fl"]
 
 [tool.flwr.app]
-publisher = "flwr-researcher"
+publisher = "syedhaseeburrehman77-hash"
 
 [tool.flwr.app.components]
-serverapp = "brain_tumor_fl.server_app:app"
-clientapp = "brain_tumor_fl.client_app:app"
+serverapp = "server_app:app"
+clientapp = "client_app:app"
 
 [tool.flwr.app.config]
 num-server-rounds = 5
 local-epochs = 1
 batch-size = 1
-learning-rate = 0.0001
+learning-rate = 0.00005
 strategy = "fedavg"
 proximal-mu = 0.01
 fraction-train = 1.0
 fraction-evaluate = 1.0
+seed = 42
+device = "auto"
+num-workers = 0
+cache-rate = 0.0
+regsimagg-regularization-round = 10
+
 data-root = "C:/Users/syedh/Documents/BraT_Segmentation_FeTs2022/MICCAI_FeTS2022_TrainingData"
 partition-csv = "C:/Users/syedh/Documents/BraT_Segmentation_FeTs2022/MICCAI_FeTS2022_TrainingData/partitioning_1.csv"
 output-dir = "artifacts"
